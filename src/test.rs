@@ -1,6 +1,7 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::testutils::Events;
 use crate::{RevoraRevenueShare, RevoraRevenueShareClient};
 
 // ── helper ────────────────────────────────────────────────────

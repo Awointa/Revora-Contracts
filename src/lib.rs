@@ -1,13 +1,8 @@
 #![no_std]
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short,
-    Address, Env, Map, Symbol, Vec,
+    Address, Env, Map, Symbol, String, Vec,
 };
-
-// ── Event symbols ────────────────────────────────────────────
-const EVENT_REVENUE_REPORTED: Symbol = symbol_short!("rev_rep");
-const EVENT_BL_ADD: Symbol          = symbol_short!("bl_add");
-const EVENT_BL_REM: Symbol          = symbol_short!("bl_rem");
 
 // ── Storage key ──────────────────────────────────────────────
 /// One blacklist map per offering, keyed by the offering's token address.
@@ -42,6 +37,8 @@ const METADATA_KEY: Symbol = symbol_short!("meta");
 
 // Event symbols
 const EVENT_REVENUE_REPORTED: Symbol = symbol_short!("rev_rep");
+const EVENT_BL_ADD: Symbol          = symbol_short!("bl_add");
+const EVENT_BL_REM: Symbol          = symbol_short!("bl_rem");
 const EVENT_METADATA_CREATED: Symbol = symbol_short!("meta_new");
 const EVENT_METADATA_UPDATED: Symbol = symbol_short!("meta_upd");
 const EVENT_METADATA_DELETED: Symbol = symbol_short!("meta_del");
@@ -261,7 +258,6 @@ impl RevoraRevenueShare {
             (offering_id,),
         );
     }
-}
 
     // ── Blacklist management ──────────────────────────────────
 
