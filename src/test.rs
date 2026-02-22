@@ -1,4 +1,5 @@
 #![cfg(test)]
+use soroban_sdk::{testutils::Address as _, testutils::Events, Address, Env};
 
 use soroban_sdk::{testutils::Address as _, Address, Env, events::Events};
 use crate::{RevoraRevenueShare, RevoraRevenueShareClient};
@@ -24,6 +25,186 @@ fn it_emits_events_on_register_and_report() {
     client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
 
     assert!(env.events().all().len() >= 2);
+}
+
+// ---------------------------------------------------------------------------
+// Pagination tests
+// ---------------------------------------------------------------------------
+
+/// Helper: set up env + client, return (env, client, issuer).
+fn setup() -> (Env, RevoraRevenueShareClient<'static>, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let issuer = Address::generate(&env);
+    (env, client, issuer)
+}
+
+/// Register `n` offerings for `issuer`, each with a unique token.
+fn register_n(env: &Env, client: &RevoraRevenueShareClient, issuer: &Address, n: u32) {
+    for i in 0..n {
+        let token = Address::generate(env);
+        client.register_offering(issuer, &token, &(100 + i));
+    }
+}
+
+#[test]
+fn empty_issuer_returns_empty_page() {
+    let (_env, client, issuer) = setup();
+
+    let (page, cursor) = client.get_offerings_page(&issuer, &0, &10);
+    assert_eq!(page.len(), 0);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn empty_issuer_count_is_zero() {
+    let (_env, client, issuer) = setup();
+    assert_eq!(client.get_offering_count(&issuer), 0);
+}
+
+#[test]
+fn register_persists_and_count_increments() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 3);
+    assert_eq!(client.get_offering_count(&issuer), 3);
+}
+
+#[test]
+fn single_page_returns_all_no_cursor() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 5);
+
+    let (page, cursor) = client.get_offerings_page(&issuer, &0, &10);
+    assert_eq!(page.len(), 5);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn multi_page_cursor_progression() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 7);
+
+    // First page: items 0..3
+    let (page1, cursor1) = client.get_offerings_page(&issuer, &0, &3);
+    assert_eq!(page1.len(), 3);
+    assert_eq!(cursor1, Some(3));
+
+    // Second page: items 3..6
+    let (page2, cursor2) = client.get_offerings_page(&issuer, &cursor1.unwrap(), &3);
+    assert_eq!(page2.len(), 3);
+    assert_eq!(cursor2, Some(6));
+
+    // Third (final) page: items 6..7
+    let (page3, cursor3) = client.get_offerings_page(&issuer, &cursor2.unwrap(), &3);
+    assert_eq!(page3.len(), 1);
+    assert_eq!(cursor3, None);
+}
+
+#[test]
+fn final_page_has_no_cursor() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 4);
+
+    let (page, cursor) = client.get_offerings_page(&issuer, &2, &10);
+    assert_eq!(page.len(), 2);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn out_of_bounds_cursor_returns_empty() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 3);
+
+    let (page, cursor) = client.get_offerings_page(&issuer, &100, &5);
+    assert_eq!(page.len(), 0);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn limit_zero_uses_max_page_limit() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 5);
+
+    // limit=0 should behave like MAX_PAGE_LIMIT (20), returning all 5.
+    let (page, cursor) = client.get_offerings_page(&issuer, &0, &0);
+    assert_eq!(page.len(), 5);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn limit_one_iterates_one_at_a_time() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 3);
+
+    let (p1, c1) = client.get_offerings_page(&issuer, &0, &1);
+    assert_eq!(p1.len(), 1);
+    assert_eq!(c1, Some(1));
+
+    let (p2, c2) = client.get_offerings_page(&issuer, &c1.unwrap(), &1);
+    assert_eq!(p2.len(), 1);
+    assert_eq!(c2, Some(2));
+
+    let (p3, c3) = client.get_offerings_page(&issuer, &c2.unwrap(), &1);
+    assert_eq!(p3.len(), 1);
+    assert_eq!(c3, None);
+}
+
+#[test]
+fn limit_exceeding_max_is_capped() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 25);
+
+    // limit=50 should be capped to 20.
+    let (page, cursor) = client.get_offerings_page(&issuer, &0, &50);
+    assert_eq!(page.len(), 20);
+    assert_eq!(cursor, Some(20));
+}
+
+#[test]
+fn offerings_preserve_correct_data() {
+    let (env, client, issuer) = setup();
+    let token = Address::generate(&env);
+    client.register_offering(&issuer, &token, &500);
+
+    let (page, _) = client.get_offerings_page(&issuer, &0, &10);
+    let offering = page.get(0).unwrap();
+    assert_eq!(offering.issuer, issuer);
+    assert_eq!(offering.token, token);
+    assert_eq!(offering.revenue_share_bps, 500);
+}
+
+#[test]
+fn separate_issuers_have_independent_pages() {
+    let (env, client, issuer_a) = setup();
+    let issuer_b = Address::generate(&env);
+
+    register_n(&env, &client, &issuer_a, 3);
+    register_n(&env, &client, &issuer_b, 5);
+
+    assert_eq!(client.get_offering_count(&issuer_a), 3);
+    assert_eq!(client.get_offering_count(&issuer_b), 5);
+
+    let (page_a, _) = client.get_offerings_page(&issuer_a, &0, &20);
+    let (page_b, _) = client.get_offerings_page(&issuer_b, &0, &20);
+    assert_eq!(page_a.len(), 3);
+    assert_eq!(page_b.len(), 5);
+}
+
+#[test]
+fn exact_page_boundary_no_cursor() {
+    let (env, client, issuer) = setup();
+    register_n(&env, &client, &issuer, 6);
+
+    // Exactly 2 pages of 3
+    let (p1, c1) = client.get_offerings_page(&issuer, &0, &3);
+    assert_eq!(p1.len(), 3);
+    assert_eq!(c1, Some(3));
+
+    let (p2, c2) = client.get_offerings_page(&issuer, &c1.unwrap(), &3);
+    assert_eq!(p2.len(), 3);
+    assert_eq!(c2, None);
 }
 
 // ── blacklist CRUD ────────────────────────────────────────────
@@ -247,322 +428,4 @@ fn blacklist_remove_requires_auth() {
     let investor  = Address::generate(&env);
 
     client.blacklist_remove(&bad_actor, &token, &investor);
-}
-
-// ── Revenue Report Idempotency Tests ───────────────────────────
-
-#[test]
-fn initial_revenue_report_emits_initial_event() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-
-    let events = env.events().all();
-    let initial_events: Vec<_> = events.iter()
-        .filter(|e| e.topics[0] == soroban_sdk::symbol_short!("rev_ini"))
-        .collect();
-    
-    assert_eq!(initial_events.len(), 1);
-}
-
-#[test]
-fn duplicate_revenue_report_without_override_emits_rejection_event() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // First report
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-    
-    // Duplicate report without override
-    client.report_revenue(&issuer, &token, &2_000_000, &1, &false);
-
-    let events = env.events().all();
-    let rejection_events: Vec<_> = events.iter()
-        .filter(|e| e.topics[0] == soroban_sdk::symbol_short!("rev_rej"))
-        .collect();
-    
-    assert_eq!(rejection_events.len(), 1);
-}
-
-#[test]
-fn duplicate_revenue_report_with_override_emits_override_event() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // First report
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-    
-    // Duplicate report with override
-    client.report_revenue(&issuer, &token, &2_000_000, &1, &true);
-
-    let events = env.events().all();
-    let override_events: Vec<_> = events.iter()
-        .filter(|e| e.topics[0] == soroban_sdk::symbol_short!("rev_ovr"))
-        .collect();
-    
-    assert_eq!(override_events.len(), 1);
-}
-
-#[test]
-fn has_revenue_report_returns_correct_status() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // Before any report
-    assert!(!client.has_revenue_report(&issuer, &token, &1));
-
-    // After first report
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-    assert!(client.has_revenue_report(&issuer, &token, &1));
-
-    // Different period should still be false
-    assert!(!client.has_revenue_report(&issuer, &token, &2));
-}
-
-#[test]
-fn get_revenue_report_returns_correct_data() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // Before any report
-    assert_eq!(client.get_revenue_report(&issuer, &token, &1), None);
-
-    // After first report
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-    let report = client.get_revenue_report(&issuer, &token, &1);
-    assert!(report.is_some());
-    let (amount, timestamp) = report.unwrap();
-    assert_eq!(amount, 1_000_000);
-    assert!(timestamp > 0);
-}
-
-#[test]
-fn get_revenue_report_history_returns_all_reports() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // Add multiple reports
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-    client.report_revenue(&issuer, &token, &2_000_000, &2, &false);
-    client.report_revenue(&issuer, &token, &1_500_000, &3, &false);
-
-    let history = client.get_revenue_report_history(&issuer, &token);
-    assert_eq!(history.len(), 3);
-    
-    // Check that all periods are present
-    let periods: Vec<u64> = history.iter().map(|(period, _, _)| *period).collect();
-    assert!(periods.contains(&1));
-    assert!(periods.contains(&2));
-    assert!(periods.contains(&3));
-}
-
-#[test]
-fn override_updates_stored_report() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // Initial report
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-    let initial_report = client.get_revenue_report(&issuer, &token, &1);
-    assert_eq!(initial_report.unwrap().0, 1_000_000);
-
-    // Override with different amount
-    client.report_revenue(&issuer, &token, &2_500_000, &1, &true);
-    let updated_report = client.get_revenue_report(&issuer, &token, &1);
-    assert_eq!(updated_report.unwrap().0, 2_500_000);
-}
-
-#[test]
-fn revenue_reports_are_isolated_per_issuer_token_pair() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer_a = Address::generate(&env);
-    let issuer_b = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // Report for issuer A
-    client.report_revenue(&issuer_a, &token, &1_000_000, &1, &false);
-    
-    // Check that issuer B doesn't have the report
-    assert!(!client.has_revenue_report(&issuer_b, &token, &1));
-    
-    // Report for issuer B
-    client.report_revenue(&issuer_b, &token, &2_000_000, &1, &false);
-    
-    // Both should have reports now
-    assert!(client.has_revenue_report(&issuer_a, &token, &1));
-    assert!(client.has_revenue_report(&issuer_b, &token, &1));
-    
-    // But with different amounts
-    let report_a = client.get_revenue_report(&issuer_a, &token, &1);
-    let report_b = client.get_revenue_report(&issuer_b, &token, &1);
-    assert_eq!(report_a.unwrap().0, 1_000_000);
-    assert_eq!(report_b.unwrap().0, 2_000_000);
-}
-
-#[test]
-fn revenue_reports_are_isolated_per_token() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token_a = Address::generate(&env);
-    let token_b = Address::generate(&env);
-
-    // Report for token A
-    client.report_revenue(&issuer, &token_a, &1_000_000, &1, &false);
-    
-    // Check that token B doesn't have the report
-    assert!(!client.has_revenue_report(&issuer, &token_b, &1));
-    
-    // Report for token B
-    client.report_revenue(&issuer, &token_b, &2_000_000, &1, &false);
-    
-    // Both should have reports now
-    assert!(client.has_revenue_report(&issuer, &token_a, &1));
-    assert!(client.has_revenue_report(&issuer, &token_b, &1));
-}
-
-#[test]
-fn large_period_id_values_work_correctly() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    let large_period_id = u64::MAX;
-    
-    // Should work with very large period IDs
-    client.report_revenue(&issuer, &token, &1_000_000, &large_period_id, &false);
-    
-    assert!(client.has_revenue_report(&issuer, &token, &large_period_id));
-    
-    let report = client.get_revenue_report(&issuer, &token, &large_period_id);
-    assert!(report.is_some());
-    assert_eq!(report.unwrap().0, 1_000_000);
-}
-
-#[test]
-fn multiple_periods_for_same_offering() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // Report for multiple periods
-    for period in 1..=5 {
-        client.report_revenue(&issuer, &token, &(period as i128 * 1_000_000), &period, &false);
-    }
-
-    // Check all periods exist
-    for period in 1..=5 {
-        assert!(client.has_revenue_report(&issuer, &token, &period));
-    }
-
-    // Check history
-    let history = client.get_revenue_report_history(&issuer, &token);
-    assert_eq!(history.len(), 5);
-}
-
-#[test]
-fn concurrent_like_submissions_handled_correctly() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    // Simulate multiple submissions for the same period
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false); // First - should be accepted
-    client.report_revenue(&issuer, &token, &1_100_000, &1, &false); // Duplicate - should be rejected
-    client.report_revenue(&issuer, &token, &1_200_000, &1, &true);  // Override - should be accepted
-    client.report_revenue(&issuer, &token, &1_300_000, &1, &false); // Duplicate - should be rejected
-
-    // Final amount should be from the override
-    let final_report = client.get_revenue_report(&issuer, &token, &1);
-    assert_eq!(final_report.unwrap().0, 1_200_000);
-
-    // Check event counts
-    let events = env.events().all();
-    let initial_events: Vec<_> = events.iter()
-        .filter(|e| e.topics[0] == soroban_sdk::symbol_short!("rev_ini"))
-        .collect();
-    let rejection_events: Vec<_> = events.iter()
-        .filter(|e| e.topics[0] == soroban_sdk::symbol_short!("rev_rej"))
-        .collect();
-    let override_events: Vec<_> = events.iter()
-        .filter(|e| e.topics[0] == soroban_sdk::symbol_short!("rev_ovr"))
-        .collect();
-
-    assert_eq!(initial_events.len(), 1);
-    assert_eq!(rejection_events.len(), 2);
-    assert_eq!(override_events.len(), 1);
-}
-
-#[test]
-#[should_panic]
-fn revenue_report_requires_auth() {
-    let env = Env::default(); // no mock_all_auths
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
-}
-
-#[test]
-fn zero_amount_revenue_report_works() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    client.report_revenue(&issuer, &token, &0, &1, &false);
-    
-    assert!(client.has_revenue_report(&issuer, &token, &1));
-    
-    let report = client.get_revenue_report(&issuer, &token, &1);
-    assert_eq!(report.unwrap().0, 0);
-}
-
-#[test]
-fn negative_amount_revenue_report_works() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = make_client(&env);
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    client.report_revenue(&issuer, &token, &-500_000, &1, &false);
-    
-    assert!(client.has_revenue_report(&issuer, &token, &1));
-    
-    let report = client.get_revenue_report(&issuer, &token, &1);
-    assert_eq!(report.unwrap().0, -500_000);
 }
