@@ -10,16 +10,29 @@ const EVENT_REVENUE_REPORTED: Symbol = symbol_short!("rev_rep");
 const EVENT_BL_ADD: Symbol          = symbol_short!("bl_add");
 const EVENT_BL_REM: Symbol          = symbol_short!("bl_rem");
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OfferingStatus {
+    Active,
+    Suspended,
+    Closed,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Offering {
+    pub issuer: Address,
+    pub token: Address,
+    pub revenue_share_bps: u32,
+    pub status: OfferingStatus,
+}
+
 // ── Storage key ──────────────────────────────────────────────
-/// One blacklist map per offering, keyed by the offering's token address.
-///
-/// Blacklist precedence rule: a blacklisted address is **always** excluded
-/// from payouts, regardless of any whitelist or investor registration.
-/// If the same address appears in both a whitelist and this blacklist,
-/// the blacklist wins unconditionally.
 #[contracttype]
 pub enum DataKey {
     Blacklist(Address),
+    Offering(Address, Address), // (Issuer, Token)
+    IssuerOfferings(Address),   // Issuer -> Vec<Token>
 }
 
 // ── Contract ─────────────────────────────────────────────────
@@ -72,9 +85,24 @@ impl RevoraRevenueShare {
         env.storage().persistent().set(&count_key, &(count + 1));
 
         env.events().publish(
-            (symbol_short!("offer_reg"), issuer.clone()),
+            (symbol_short!("offer_reg"), issuer),
             (token, revenue_share_bps),
         );
+    }
+
+    /// Fetch a single offering by issuer and token.
+    pub fn get_offering(env: Env, issuer: Address, token: Address) -> Option<Offering> {
+        let key = DataKey::Offering(issuer, token);
+        env.storage().persistent().get(&key)
+    }
+
+    /// List all offering tokens for an issuer.
+    pub fn list_offerings(env: Env, issuer: Address) -> Vec<Address> {
+        let key = DataKey::IssuerOfferings(issuer);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     /// Record a revenue report for an offering.

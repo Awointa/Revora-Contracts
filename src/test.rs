@@ -1,12 +1,12 @@
 #![cfg(test)]
 use soroban_sdk::{testutils::Address as _, testutils::Events, Address, Env};
 
-use soroban_sdk::{testutils::Address as _, Address, Env};
-use crate::{RevoraRevenueShare, RevoraRevenueShareClient};
+use soroban_sdk::{testutils::Address as _, testutils::Events as _, Address, Env};
+use crate::{RevoraRevenueShare, RevoraRevenueShareClient, OfferingStatus};
 
 // ── helper ────────────────────────────────────────────────────
 
-fn make_client(env: &Env) -> RevoraRevenueShareClient {
+fn make_client(env: &Env) -> RevoraRevenueShareClient<'_> {
     let id = env.register_contract(None, RevoraRevenueShare);
     RevoraRevenueShareClient::new(env, &id)
 }
