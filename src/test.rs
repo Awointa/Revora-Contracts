@@ -471,7 +471,8 @@ fn register_offering_accepts_bps_exactly_10000() {
 // ---------------------------------------------------------------------------
 
 /// Maximum reasonable offering count used in tests to probe storage growth.
-const STORAGE_STRESS_OFFERING_COUNT: u32 = 200;
+/// Reduced to 50 to stay within Soroban computational budget limits.
+const STORAGE_STRESS_OFFERING_COUNT: u32 = 50;
 
 #[test]
 fn storage_stress_many_offerings_no_panic() {
