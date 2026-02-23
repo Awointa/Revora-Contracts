@@ -65,12 +65,12 @@ fn fuzz_period_and_amount_boundaries_do_not_panic() {
     let mut calls = 0usize;
     for amount in BOUNDARY_AMOUNTS {
         for period in BOUNDARY_PERIODS {
-            client.report_revenue(&issuer, &token, &amount, &period);
+            client.report_revenue(&issuer, &token, &amount, &period, &false);
             calls += 1;
         }
     }
 
-    assert_eq!(env.events().all().len(), calls as u32);
+    assert_eq!(env.events().all().len(), (calls as u32) * 2);
 }
 
 #[test]
@@ -108,10 +108,10 @@ fn fuzz_period_and_amount_repeatable_sweep_do_not_panic() {
             period = 0;
         }
 
-        client.report_revenue(&issuer, &token, &amount, &period);
+        client.report_revenue(&issuer, &token, &amount, &period, &false);
     }
 
-    assert_eq!(env.events().all().len(), FUZZ_ITERATIONS as u32);
+    assert_eq!(env.events().all().len(), (FUZZ_ITERATIONS as u32) * 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -1981,10 +1981,6 @@ fn testnet_mode_disabled_by_default() {
 
 #[test]
 fn set_testnet_mode_requires_admin() {
-// ── Emergency pause tests ───────────────────────────────────────
-
-#[test]
-fn pause_unpause_idempotence_and_events() {
     let env = Env::default();
     env.mock_all_auths();
     let client = make_client(&env);
@@ -2046,28 +2042,6 @@ fn testnet_mode_can_be_toggled() {
 
 #[test]
 fn testnet_mode_allows_bps_over_10000() {
-    client.initialize(&admin, &None::<Address>);
-    assert!(!client.is_paused());
-
-    // Pause twice (idempotent)
-    client.pause_admin(&admin);
-    assert!(client.is_paused());
-    client.pause_admin(&admin);
-    assert!(client.is_paused());
-
-    // Unpause twice (idempotent)
-    client.unpause_admin(&admin);
-    assert!(!client.is_paused());
-    client.unpause_admin(&admin);
-    assert!(!client.is_paused());
-
-    // Verify events were emitted
-    assert!(env.events().all().len() >= 5); // init + pause + pause + unpause + unpause
-}
-
-#[test]
-#[should_panic(expected = "contract is paused")]
-fn register_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
     let client = make_client(&env);
@@ -2120,7 +2094,7 @@ fn testnet_mode_skips_concentration_enforcement() {
     client.report_concentration(&issuer, &token, &8000); // Over limit
 
     // In testnet mode, report_revenue should succeed despite concentration being over limit
-    let result = client.try_report_revenue(&issuer, &token, &1_000, &1);
+    let result = client.try_report_revenue(&issuer, &token, &1_000, &1, &false);
     assert!(result.is_ok());
 }
 
@@ -2138,7 +2112,7 @@ fn testnet_mode_disabled_enforces_concentration() {
     client.report_concentration(&issuer, &token, &8000); // Over limit
 
     // Should fail with concentration enforcement
-    let result = client.try_report_revenue(&issuer, &token, &1_000, &1);
+    let result = client.try_report_revenue(&issuer, &token, &1_000, &1, &false);
     assert!(result.is_err());
 }
 
@@ -2169,14 +2143,6 @@ fn testnet_mode_toggle_after_offerings_exist() {
 
 #[test]
 fn testnet_mode_affects_only_validation_not_storage() {
-    client.initialize(&admin, &None::<Address>);
-    client.pause_admin(&admin);
-    client.register_offering(&issuer, &token, &1_000);
-}
-
-#[test]
-#[should_panic(expected = "contract is paused")]
-fn report_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
     let client = make_client(&env);
@@ -2222,13 +2188,6 @@ fn testnet_mode_multiple_offerings_with_varied_bps() {
 
 #[test]
 fn testnet_mode_concentration_warning_still_emitted() {
-    client.initialize(&admin, &None::<Address>);
-    client.pause_admin(&admin);
-    client.report_revenue(&issuer, &token, &1_000_000, &1);
-}
-
-#[test]
-fn pause_safety_role_works() {
     let env = Env::default();
     env.mock_all_auths();
     let client = make_client(&env);
@@ -2250,23 +2209,6 @@ fn pause_safety_role_works() {
 
 #[test]
 fn testnet_mode_normal_operations_unaffected() {
-    let safety = Address::generate(&env);
-
-    client.initialize(&admin, &Some(safety.clone()));
-    assert!(!client.is_paused());
-
-    // Safety can pause
-    client.pause_safety(&safety);
-    assert!(client.is_paused());
-
-    // Safety can unpause
-    client.unpause_safety(&safety);
-    assert!(!client.is_paused());
-}
-
-#[test]
-#[should_panic(expected = "contract is paused")]
-fn blacklist_add_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
     let client = make_client(&env);
@@ -2279,7 +2221,7 @@ fn blacklist_add_blocked_while_paused() {
 
     // Normal operations should work as expected
     client.register_offering(&issuer, &token, &5_000);
-    client.report_revenue(&issuer, &token, &1_000_000, &1);
+    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
 
     let summary = client.get_audit_summary(&issuer, &token).unwrap();
     assert_eq!(summary.total_revenue, 1_000_000);
@@ -2288,17 +2230,6 @@ fn blacklist_add_blocked_while_paused() {
 
 #[test]
 fn testnet_mode_blacklist_operations_unaffected() {
-    let token = Address::generate(&env);
-    let investor = Address::generate(&env);
-
-    client.initialize(&admin, &None::<Address>);
-    client.pause_admin(&admin);
-    client.blacklist_add(&admin, &token, &investor);
-}
-
-#[test]
-#[should_panic(expected = "contract is paused")]
-fn blacklist_remove_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
     let client = make_client(&env);
@@ -2351,6 +2282,113 @@ fn testnet_mode_requires_auth_to_set() {
     client.set_admin(&admin);
     // This should panic because we didn't mock auth
     client.set_testnet_mode(&true);
+}
+
+// ── Emergency pause tests ───────────────────────────────────────
+
+#[test]
+fn pause_unpause_idempotence_and_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &None::<Address>);
+    assert!(!client.is_paused());
+
+    // Pause twice (idempotent)
+    client.pause_admin(&admin);
+    assert!(client.is_paused());
+    client.pause_admin(&admin);
+    assert!(client.is_paused());
+
+    // Unpause twice (idempotent)
+    client.unpause_admin(&admin);
+    assert!(!client.is_paused());
+    client.unpause_admin(&admin);
+    assert!(!client.is_paused());
+
+    // Verify events were emitted
+    assert!(env.events().all().len() >= 5); // init + pause + pause + unpause + unpause
+}
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn register_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.initialize(&admin, &None::<Address>);
+    client.pause_admin(&admin);
+    client.register_offering(&issuer, &token, &1_000);
+}
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn report_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.initialize(&admin, &None::<Address>);
+    // Register before pausing
+    client.register_offering(&issuer, &token, &1_000);
+    client.pause_admin(&admin);
+    client.report_revenue(&issuer, &token, &1_000_000, &1, &false);
+}
+
+#[test]
+fn pause_safety_role_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    let safety = Address::generate(&env);
+
+    client.initialize(&admin, &Some(safety.clone()));
+    assert!(!client.is_paused());
+
+    // Safety can pause
+    client.pause_safety(&safety);
+    assert!(client.is_paused());
+
+    // Safety can unpause
+    client.unpause_safety(&safety);
+    assert!(!client.is_paused());
+}
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn blacklist_add_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let investor = Address::generate(&env);
+
+    client.initialize(&admin, &None::<Address>);
+    client.pause_admin(&admin);
+    client.blacklist_add(&admin, &token, &investor);
+}
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn blacklist_remove_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let investor = Address::generate(&env);
+
     client.initialize(&admin, &None::<Address>);
     client.pause_admin(&admin);
     client.blacklist_remove(&admin, &token, &investor);
