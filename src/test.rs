@@ -1,8 +1,8 @@
 #![cfg(test)]
 use soroban_sdk::{
-    symbol_short, vec,
+    symbol_short,
     testutils::{Address as _, Events as _, Ledger as _},
-    token, Address, Env, IntoVal, Vec,
+    token, vec, Address, Env, IntoVal, Vec,
 };
 
 use crate::{RevoraError, RevoraRevenueShare, RevoraRevenueShareClient, RoundingMode};
