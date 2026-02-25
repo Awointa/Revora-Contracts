@@ -4583,7 +4583,7 @@ fn test_metadata_set_emits_event() {
     // Verify the event contains the correct symbol
     let last_event = events.last().unwrap();
     let (_, topics, _) = last_event;
-    let topics_vec: Vec<soroban_sdk::Val> = topics.into();
+    let topics_vec: Vec<soroban_sdk::Val> = topics;
     let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 }
@@ -4612,7 +4612,7 @@ fn test_metadata_update_emits_event() {
     // Verify the event contains the correct symbol for update
     let last_event = events.last().unwrap();
     let (_, topics, _) = last_event;
-    let topics_vec: Vec<soroban_sdk::Val> = topics.into();
+    let topics_vec: Vec<soroban_sdk::Val> = topics;
     let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_upd"));
 }
@@ -4637,7 +4637,7 @@ fn test_metadata_events_include_correct_data() {
 
     assert_eq!(event_contract, contract_id);
 
-    let topics_vec: Vec<soroban_sdk::Val> = topics.into();
+    let topics_vec: Vec<soroban_sdk::Val> = topics;
     let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 
