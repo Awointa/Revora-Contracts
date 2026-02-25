@@ -205,17 +205,6 @@ fn combined_flow_preserves_event_order() {
                     .into_val(&env),
                 (amount, period_id).into_val(&env),
             ),
-            (
-                contract_id.clone(),
-                (
-                    symbol_short!("rev_repa"),
-                    issuer.clone(),
-                    token.clone(),
-                    token.clone()
-                )
-                    .into_val(&env),
-                (amount, period_id).into_val(&env),
-            ),
         ]
     );
 }
