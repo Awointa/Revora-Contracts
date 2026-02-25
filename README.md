@@ -4,7 +4,9 @@ Soroban contract for revenue-share offerings and blacklist management.
 
 ## Contract interface summary (for integrators)
 
-**Contract:** `RevoraRevenueShare`
+*- **Issuer authority:** Only the offering issuer can register offerings, report revenue, set concentration limits, set rounding mode, and report concentration for that offering. The contract does not implement a separate "platform admin" role; all offering-level actions are issuer-authorized.
+- **Issuer transferability:** Issuer control can be securely transferred via a two-step propose/accept flow. The old issuer proposes, the new issuer accepts. Either party can abort before acceptance (old issuer cancels, or new issuer simply doesn't accept). This prevents accidental loss of control and griefing attacks.
+- **Blacklist authority:** Any address that passes `require_auth` can add/remove blacklist entries for any token. The contract does not restrict blacklist edits to the issuer. Integrators must enforce policy off-chain or via a wrapper if only the issuer should manage the blacklist.ontract:** `RevoraRevenueShare`
 
 ### Public methods
 
@@ -28,6 +30,10 @@ Soroban contract for revenue-share offerings and blacklist management.
 | `set_rounding_mode` | `issuer: Address`, `token: Address`, `mode: RoundingMode` | `Result<(), RevoraError>` | issuer | Set rounding mode for share calculations. Offering must exist. |
 | `get_rounding_mode` | `issuer: Address`, `token: Address` | `RoundingMode` | — | Get rounding mode (default Truncation if not set). |
 | `compute_share` | `amount: i128`, `revenue_share_bps: u32`, `mode: RoundingMode` | `i128` | — | Compute share of amount at given bps with given rounding. Bounds: 0 ≤ result ≤ amount. |
+| `propose_issuer_transfer` | `token: Address`, `new_issuer: Address` | `Result<(), RevoraError>` | current issuer | Propose transferring issuer control to a new address. First step of two-step transfer. |
+| `accept_issuer_transfer` | `token: Address` | `Result<(), RevoraError>` | proposed new issuer | Accept a pending issuer transfer. Completes the transfer and grants full control to new issuer. |
+| `cancel_issuer_transfer` | `token: Address` | `Result<(), RevoraError>` | current issuer | Cancel a pending issuer transfer before it's accepted. |
+| `get_pending_issuer_transfer` | `token: Address` | `Option<Address>` | — | Get the proposed new issuer for a pending transfer, if any. |
 | `set_testnet_mode` | `enabled: bool` | `Result<(), RevoraError>` | admin | Enable or disable testnet mode. When enabled, certain validations are relaxed for testnet deployments. |
 | `is_testnet_mode` | — | `bool` | — | Return true if testnet mode is enabled. |
 
@@ -45,6 +51,9 @@ Soroban contract for revenue-share offerings and blacklist management.
 | 1 | `InvalidRevenueShareBps` | `revenue_share_bps` > 10000. |
 | 2 | `LimitReached` | Reserved / offering not found (e.g. for set_concentration_limit, set_rounding_mode). |
 | 3 | `ConcentrationLimitExceeded` | Holder concentration exceeds configured limit and enforcement is on; `report_revenue` rejected. |
+| 12 | `IssuerTransferPending` | A transfer is already pending for this offering. |
+| 13 | `NoTransferPending` | No transfer is pending for this offering (accept/cancel failed). |
+| 14 | `UnauthorizedTransferAccept` | Caller is not authorized to accept this transfer. |
 
 Auth failures (e.g. wrong signer) are signaled by host/panic, not `RevoraError`. Use `try_register_offering`, `try_report_revenue`, and similar `try_*` client methods to receive contract errors as `Result`.
 
@@ -57,6 +66,9 @@ Auth failures (e.g. wrong signer) are signaled by host/panic, not `RevoraError`.
 | `bl_add` | `(token, caller), investor` | After `blacklist_add`. |
 | `bl_rem` | `(token, caller), investor` | After `blacklist_remove`. |
 | `conc_warn` | `(issuer, token), (concentration_bps, limit_bps)` | When `report_concentration` is called and reported concentration exceeds configured limit (warning only; enforce blocks at `report_revenue`). |
+| `iss_prop` | `(token), (current_issuer, proposed_new_issuer)` | When `propose_issuer_transfer` is called. |
+| `iss_acc` | `(token), (old_issuer, new_issuer)` | When `accept_issuer_transfer` completes the transfer. |
+| `iss_canc` | `(token), (current_issuer, proposed_new_issuer)` | When `cancel_issuer_transfer` revokes a pending transfer. |
 | `test_mode` | `(admin), enabled` | When `set_testnet_mode` is called to toggle testnet mode. |
 
 ### Call patterns and limits
@@ -65,6 +77,7 @@ Auth failures (e.g. wrong signer) are signaled by host/panic, not `RevoraError`.
 - **Off-chain:** Prefer small page sizes and bounded blacklist sizes for predictable gas. See storage/gas tests in `src/test.rs` for stress behavior.
 - **Holder concentration:** Concentration is not computed on-chain (no token balance reads). Issuer or indexer calls `report_concentration(issuer, token, bps)` with the current top-holder share in bps; the contract stores it and enforces or warns based on `set_concentration_limit`. Use `try_report_revenue` when enforcement may be enabled.
 - **Rounding:** Use `compute_share(amount, revenue_share_bps, mode)` for consistent distribution math. Per-offering default is `get_rounding_mode(issuer, token)` (Truncation if unset). Sum of shares must not exceed total; both modes keep result in [0, amount].
+- **Issuer Transfer:** See [ISSUER_TRANSFER.md](./ISSUER_TRANSFER.md) for comprehensive documentation on securely transferring issuer control via the two-step propose/accept flow.
 - **Testnet mode:** Admin can enable testnet mode via `set_testnet_mode(true)` to relax certain validations for non-production deployments. When enabled: (1) `register_offering` allows `revenue_share_bps > 10000`, (2) `report_revenue` skips concentration enforcement. Use only for testnet/development environments. Check mode with `is_testnet_mode()`.
 
 ---
@@ -2201,6 +2214,7 @@ This section enumerates key security assumptions, trust boundaries, and mitigati
 | Risk | Mitigation |
 |------|------------|
 | **Auth misuse / wrong signer** | All state-changing entrypoints call `require_auth` on the appropriate address. Auth failures cause host panic; use `try_*` client methods to handle errors. Tests: `blacklist_add_requires_auth`, `blacklist_remove_requires_auth`. |
+| **Issuer transfer security** | Two-step propose/accept flow prevents accidental loss of control. Old issuer must propose, new issuer must explicitly accept. Either can abort (old cancels, new doesn't accept). Current issuer verified via reverse lookup on all auth checks. Tests: `issuer_transfer_*` (35 tests covering happy path, abuse attempts, edge cases, and integration). |
 | **Incorrect math (overflow, rounding)** | Revenue share bps is capped at 10000. `compute_share` uses checked arithmetic where applicable and clamps output to [0, amount]. Rounding modes (Truncation, RoundHalfUp) are documented and tested. Tests: `compute_share_*`, `register_offering_rejects_bps_over_10000`. |
 | **Concentration guardrail bypass** | Enforcement is applied in `report_revenue` using the last value set by `report_concentration`. If concentration is not reported or is reported low, enforcement cannot block. Design: guardrail is advisory or best-effort unless the issuer reliably reports concentration before each report. Tests: concentration_enforce_blocks_report_revenue_when_over_limit, concentration_near_threshold_boundary. |
 | **Audit summary consistency** | Summary is updated atomically in `report_revenue` (total_revenue += amount, report_count += 1). No corrections or overrides are supported; each report is additive. Tests: audit_summary_aggregates_revenue_and_count, audit_summary_per_offering_isolation. |
