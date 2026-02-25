@@ -46,6 +46,15 @@ const EVENT_REVENUE_REPORT_REJECTED: Symbol = symbol_short!("rev_rej");
 const EVENT_REVENUE_REPORT_REJECTED_ASSET: Symbol = symbol_short!("rev_reja");
 const EVENT_BL_ADD: Symbol = symbol_short!("bl_add");
 const EVENT_BL_REM: Symbol = symbol_short!("bl_rem");
+// Versioned event symbols (v1). We emit legacy events for compatibility
+// and also emit explicit v1 events that include a leading `version` field.
+const EVENT_OFFER_REG_V1: Symbol = symbol_short!("ofr_reg1");
+const EVENT_REV_INIT_V1: Symbol = symbol_short!("rv_init1");
+const EVENT_REV_INIA_V1: Symbol = symbol_short!("rv_inia1");
+const EVENT_REV_REP_V1: Symbol = symbol_short!("rv_rep1");
+const EVENT_REV_REPA_V1: Symbol = symbol_short!("rv_repa1");
+
+const EVENT_SCHEMA_VERSION: u32 = 1;
 const EVENT_CONCENTRATION_WARNING: Symbol = symbol_short!("conc_warn");
 const EVENT_REV_DEPOSIT: Symbol = symbol_short!("rev_dep");
 const EVENT_CLAIM: Symbol = symbol_short!("claim");
@@ -153,6 +162,8 @@ pub enum DataKey {
     Safety,
     /// Global pause flag; when true, state-mutating ops are disabled (#7).
     Paused,
+    /// Feature flag: emit versioned events when present (v1 schema).
+    EventVersioningEnabled,
 }
 
 /// Maximum number of offerings returned in a single page.
@@ -167,6 +178,14 @@ pub struct RevoraRevenueShare;
 
 #[contractimpl]
 impl RevoraRevenueShare {
+    fn is_event_versioning_enabled(env: Env) -> bool {
+        let key = DataKey::EventVersioningEnabled;
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&key)
+            .unwrap_or(false)
+    }
+
     /// Returns error if contract is frozen (#32). Call at start of state-mutating entrypoints.
     fn require_not_frozen(env: &Env) -> Result<(), RevoraError> {
         let key = DataKey::Frozen;
@@ -312,9 +331,16 @@ impl RevoraRevenueShare {
         env.storage().persistent().set(&count_key, &(count + 1));
 
         env.events().publish(
-            (symbol_short!("offer_reg"), issuer),
-            (token, revenue_share_bps, payout_asset),
+            (symbol_short!("offer_reg"), issuer.clone()),
+            (token.clone(), revenue_share_bps, payout_asset.clone()),
         );
+        // Optionally emit a versioned v1 event with explicit version field
+        if Self::is_event_versioning_enabled(env.clone()) {
+            env.events().publish(
+                (EVENT_OFFER_REG_V1, issuer.clone()),
+                (EVENT_SCHEMA_VERSION, token.clone(), revenue_share_bps, payout_asset.clone()),
+            );
+        }
         Ok(())
     }
 
@@ -452,10 +478,10 @@ impl RevoraRevenueShare {
             }
         }
 
-        // Backward-compatible event
+        // Backward-compatible event (preserve `blacklist` for additional publishes)
         env.events().publish(
             (EVENT_REVENUE_REPORTED, issuer.clone(), token.clone()),
-            (amount, period_id, blacklist),
+            (amount, period_id, blacklist.clone()),
         );
 
         env.events().publish(
@@ -463,10 +489,33 @@ impl RevoraRevenueShare {
                 EVENT_REVENUE_REPORTED_ASSET,
                 issuer.clone(),
                 token.clone(),
-                payout_asset,
+                payout_asset.clone(),
             ),
             (amount, period_id),
         );
+
+        // Optionally emit versioned v1 events for forward-compatible consumers
+        if Self::is_event_versioning_enabled(env.clone()) {
+            env.events().publish(
+                (EVENT_REV_INIT_V1, issuer.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
+            );
+
+            env.events().publish(
+                (EVENT_REV_INIA_V1, issuer.clone(), token.clone(), payout_asset.clone()),
+                (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
+            );
+
+            env.events().publish(
+                (EVENT_REV_REP_V1, issuer.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
+            );
+
+            env.events().publish(
+                (EVENT_REV_REPA_V1, issuer.clone(), token.clone(), payout_asset.clone()),
+                (EVENT_SCHEMA_VERSION, amount, period_id),
+            );
+        }
 
         // Audit log summary (#34): maintain per-offering total revenue and report count
         let summary_key = DataKey::AuditSummary(issuer.clone(), token.clone());
