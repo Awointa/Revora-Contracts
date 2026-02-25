@@ -859,6 +859,46 @@ fn it_emits_events_on_register_and_report() {
     assert!(env.events().all().len() >= 2);
 }
 
+#[test]
+fn it_emits_versioned_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout = Address::generate(&env);
+    let bps: u32 = 1_000;
+    let amount: i128 = 1_000_000;
+    let period_id: u64 = 1;
+
+    // enable versioned events for this test
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&crate::DataKey::EventVersioningEnabled, &true);
+    });
+
+    client.register_offering(&issuer, &token, &bps, &payout);
+    client.report_revenue(&issuer, &token, &payout, &amount, &period_id, &false);
+
+    let events = env.events().all();
+
+    let expected = (
+        contract_id.clone(),
+        (symbol_short!("ofr_reg1"), issuer.clone()).into_val(&env),
+        (
+            crate::EVENT_SCHEMA_VERSION,
+            token.clone(),
+            bps,
+            payout.clone(),
+        )
+            .into_val(&env),
+    );
+
+    assert!(events.contains(&expected));
+}
+
 // ── period/amount fuzz coverage ───────────────────────────────
 
 #[test]
