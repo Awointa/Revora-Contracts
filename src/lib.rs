@@ -338,7 +338,12 @@ impl RevoraRevenueShare {
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
                 (EVENT_OFFER_REG_V1, issuer.clone()),
-                (EVENT_SCHEMA_VERSION, token.clone(), revenue_share_bps, payout_asset.clone()),
+                (
+                    EVENT_SCHEMA_VERSION,
+                    token.clone(),
+                    revenue_share_bps,
+                    payout_asset.clone(),
+                ),
             );
         }
         Ok(())
@@ -502,7 +507,12 @@ impl RevoraRevenueShare {
             );
 
             env.events().publish(
-                (EVENT_REV_INIA_V1, issuer.clone(), token.clone(), payout_asset.clone()),
+                (
+                    EVENT_REV_INIA_V1,
+                    issuer.clone(),
+                    token.clone(),
+                    payout_asset.clone(),
+                ),
                 (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
             );
 
@@ -512,7 +522,12 @@ impl RevoraRevenueShare {
             );
 
             env.events().publish(
-                (EVENT_REV_REPA_V1, issuer.clone(), token.clone(), payout_asset.clone()),
+                (
+                    EVENT_REV_REPA_V1,
+                    issuer.clone(),
+                    token.clone(),
+                    payout_asset.clone(),
+                ),
                 (EVENT_SCHEMA_VERSION, amount, period_id),
             );
         }

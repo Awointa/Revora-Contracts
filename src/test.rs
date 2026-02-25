@@ -887,7 +887,13 @@ fn it_emits_versioned_events() {
     let expected = (
         contract_id.clone(),
         (symbol_short!("ofr_reg1"), issuer.clone()).into_val(&env),
-        (crate::EVENT_SCHEMA_VERSION, token.clone(), bps, payout.clone()).into_val(&env),
+        (
+            crate::EVENT_SCHEMA_VERSION,
+            token.clone(),
+            bps,
+            payout.clone(),
+        )
+            .into_val(&env),
     );
 
     assert!(events.contains(&expected));
