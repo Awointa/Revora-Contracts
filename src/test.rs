@@ -1076,7 +1076,13 @@ fn deposit_revenue_rejects_mismatched_payout_asset_on_first_deposit() {
 
     client.register_offering(&issuer, &offering_token, &5_000, &configured_asset);
     mint_tokens(&env, &wrong_asset, &wrong_admin, &issuer, &1_000_000);
-    mint_tokens(&env, &configured_asset, &configured_admin, &issuer, &1_000_000);
+    mint_tokens(
+        &env,
+        &configured_asset,
+        &configured_admin,
+        &issuer,
+        &1_000_000,
+    );
 
     let r = client.try_deposit_revenue(&issuer, &offering_token, &wrong_asset, &100_000, &1);
     assert!(r.is_err());
