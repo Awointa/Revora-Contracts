@@ -50,6 +50,9 @@ const EVENT_TESTNET_MODE: Symbol = symbol_short!("test_mode");
 const EVENT_INIT: Symbol = symbol_short!("init");
 const EVENT_PAUSED: Symbol = symbol_short!("paused");
 const EVENT_UNPAUSED: Symbol = symbol_short!("unpaused");
+const EVENT_DIST_CALC: Symbol = symbol_short!("dist_calc");
+
+const BPS_DENOMINATOR: i128 = 10_000;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -1024,6 +1027,101 @@ impl RevoraRevenueShare {
             .persistent()
             .get::<DataKey, bool>(&DataKey::Frozen)
             .unwrap_or(false)
+    }
+
+    // ── Revenue distribution calculation ───────────────────────────
+
+    /// Calculate the distribution amount for a token holder.
+    ///
+    /// This function computes the payout amount for a single holder using
+    /// fixed-point arithmetic with basis points (BPS) precision.
+    ///
+    /// Formula:
+    ///   distributable_revenue = total_revenue * revenue_share_bps / BPS_DENOMINATOR
+    ///   holder_payout = holder_balance * distributable_revenue / total_supply
+    ///
+    /// Rounding: Uses integer division which rounds down (floor).
+    /// This is conservative and ensures the contract never over-distributes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn calculate_distribution(
+        env: Env,
+        caller: Address,
+        issuer: Address,
+        token: Address,
+        total_revenue: i128,
+        total_supply: i128,
+        holder_balance: i128,
+        holder: Address,
+    ) -> i128 {
+        caller.require_auth();
+
+        if total_supply == 0 {
+            panic!("total_supply cannot be zero");
+        }
+
+        let offering = Self::get_offering(env.clone(), issuer.clone(), token.clone())
+            .expect("offering not found");
+
+        if Self::is_blacklisted(env.clone(), token.clone(), holder.clone()) {
+            panic!("holder is blacklisted and cannot receive distribution");
+        }
+
+        if total_revenue == 0 || holder_balance == 0 {
+            let payout = 0i128;
+            env.events().publish(
+                (EVENT_DIST_CALC, token.clone(), holder.clone()),
+                (
+                    total_revenue,
+                    total_supply,
+                    holder_balance,
+                    offering.revenue_share_bps,
+                    payout,
+                ),
+            );
+            return payout;
+        }
+
+        let distributable_revenue = (total_revenue * offering.revenue_share_bps as i128)
+            .checked_div(BPS_DENOMINATOR)
+            .expect("division overflow");
+
+        let payout = (holder_balance * distributable_revenue)
+            .checked_div(total_supply)
+            .expect("division overflow");
+
+        env.events().publish(
+            (EVENT_DIST_CALC, token, holder),
+            (
+                total_revenue,
+                total_supply,
+                holder_balance,
+                offering.revenue_share_bps,
+                payout,
+            ),
+        );
+
+        payout
+    }
+
+    /// Calculate the total distributable revenue for an offering.
+    ///
+    /// This is a helper function for off-chain verification.
+    pub fn calculate_total_distributable(
+        env: Env,
+        issuer: Address,
+        token: Address,
+        total_revenue: i128,
+    ) -> i128 {
+        let offering =
+            Self::get_offering(env, issuer, token).expect("offering not found for token");
+
+        if total_revenue == 0 {
+            return 0;
+        }
+
+        (total_revenue * offering.revenue_share_bps as i128)
+            .checked_div(BPS_DENOMINATOR)
+            .expect("division overflow")
     }
 
     // ── Testnet mode configuration (#24) ───────────────────────

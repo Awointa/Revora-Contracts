@@ -2958,3 +2958,429 @@ fn blacklist_remove_blocked_while_paused() {
     client.pause_admin(&admin);
     client.blacklist_remove(&admin, &token, &investor);
 }
+
+// ===========================================================================
+// On-chain revenue distribution calculation (#4)
+// ===========================================================================
+
+#[test]
+fn calculate_distribution_basic() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let total_revenue = 1_000_000_i128;
+    let total_supply = 10_000_i128;
+    let holder_balance = 1_000_i128;
+
+    let payout = client.calculate_distribution(
+        &caller,
+        &issuer,
+        &token,
+        &total_revenue,
+        &total_supply,
+        &holder_balance,
+        &holder,
+    );
+
+    assert_eq!(payout, 50_000);
+}
+
+#[test]
+fn calculate_distribution_bps_100_percent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &10_000);
+
+    let payout =
+        client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &100, &holder);
+
+    assert_eq!(payout, 10_000);
+}
+
+#[test]
+fn calculate_distribution_bps_25_percent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &2_500);
+
+    let payout =
+        client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &200, &holder);
+
+    assert_eq!(payout, 5_000);
+}
+
+#[test]
+fn calculate_distribution_zero_revenue() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let payout = client.calculate_distribution(&caller, &issuer, &token, &0, &1_000, &100, &holder);
+
+    assert_eq!(payout, 0);
+}
+
+#[test]
+fn calculate_distribution_zero_balance() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let payout =
+        client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &0, &holder);
+
+    assert_eq!(payout, 0);
+}
+
+#[test]
+#[should_panic(expected = "total_supply cannot be zero")]
+fn calculate_distribution_zero_supply_panics() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.calculate_distribution(&caller, &issuer, &token, &100_000, &0, &100, &holder);
+}
+
+#[test]
+#[should_panic(expected = "offering not found")]
+fn calculate_distribution_nonexistent_offering_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &100, &holder);
+}
+
+#[test]
+#[should_panic(expected = "holder is blacklisted")]
+fn calculate_distribution_blacklisted_holder_panics() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.blacklist_add(&issuer, &token, &holder);
+
+    client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &100, &holder);
+}
+
+#[test]
+fn calculate_distribution_rounds_down() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &3_333);
+
+    let payout = client.calculate_distribution(&caller, &issuer, &token, &100, &100, &10, &holder);
+
+    assert_eq!(payout, 3);
+}
+
+#[test]
+fn calculate_distribution_rounds_down_exact() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &2_500);
+
+    let payout =
+        client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &400, &holder);
+
+    assert_eq!(payout, 10_000);
+}
+
+#[test]
+fn calculate_distribution_large_values() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let large_revenue = 1_000_000_000_000_i128;
+    let total_supply = 1_000_000_000_i128;
+    let holder_balance = 100_000_000_i128;
+
+    let payout = client.calculate_distribution(
+        &caller,
+        &issuer,
+        &token,
+        &large_revenue,
+        &total_supply,
+        &holder_balance,
+        &holder,
+    );
+
+    assert_eq!(payout, 50_000_000_000);
+}
+
+#[test]
+fn calculate_distribution_emits_event() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let before = env.events().all().len();
+    client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &100, &holder);
+    assert!(env.events().all().len() > before);
+}
+
+#[test]
+fn calculate_distribution_multiple_holders_sum() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &5_000);
+
+    let holder_a = Address::generate(&env);
+    let holder_b = Address::generate(&env);
+    let holder_c = Address::generate(&env);
+
+    let total_supply = 1_000_i128;
+    let total_revenue = 100_000_i128;
+
+    let payout_a = client.calculate_distribution(
+        &caller,
+        &issuer,
+        &token,
+        &total_revenue,
+        &total_supply,
+        &500,
+        &holder_a,
+    );
+    let payout_b = client.calculate_distribution(
+        &caller,
+        &issuer,
+        &token,
+        &total_revenue,
+        &total_supply,
+        &300,
+        &holder_b,
+    );
+    let payout_c = client.calculate_distribution(
+        &caller,
+        &issuer,
+        &token,
+        &total_revenue,
+        &total_supply,
+        &200,
+        &holder_c,
+    );
+
+    assert_eq!(payout_a, 25_000);
+    assert_eq!(payout_b, 15_000);
+    assert_eq!(payout_c, 10_000);
+    assert_eq!(payout_a + payout_b + payout_c, 50_000);
+}
+
+#[test]
+#[should_panic]
+fn calculate_distribution_requires_auth() {
+    let env = Env::default();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &5_000);
+
+    client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &100, &holder);
+}
+
+#[test]
+fn calculate_total_distributable_basic() {
+    let (_env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+
+    let total = client.calculate_total_distributable(&issuer, &token, &100_000);
+
+    assert_eq!(total, 50_000);
+}
+
+#[test]
+fn calculate_total_distributable_bps_100_percent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &10_000);
+
+    let total = client.calculate_total_distributable(&issuer, &token, &100_000);
+
+    assert_eq!(total, 100_000);
+}
+
+#[test]
+fn calculate_total_distributable_bps_25_percent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &2_500);
+
+    let total = client.calculate_total_distributable(&issuer, &token, &100_000);
+
+    assert_eq!(total, 25_000);
+}
+
+#[test]
+fn calculate_total_distributable_zero_revenue() {
+    let (_env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+
+    let total = client.calculate_total_distributable(&issuer, &token, &0);
+
+    assert_eq!(total, 0);
+}
+
+#[test]
+fn calculate_total_distributable_rounds_down() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.register_offering(&issuer, &token, &3_333);
+
+    let total = client.calculate_total_distributable(&issuer, &token, &100);
+
+    assert_eq!(total, 33);
+}
+
+#[test]
+#[should_panic(expected = "offering not found")]
+fn calculate_total_distributable_nonexistent_offering_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.calculate_total_distributable(&issuer, &token, &100_000);
+}
+
+#[test]
+fn calculate_total_distributable_large_value() {
+    let (_env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+
+    let total = client.calculate_total_distributable(&issuer, &token, &1_000_000_000_000);
+
+    assert_eq!(total, 500_000_000_000);
+}
+
+#[test]
+fn calculate_distribution_offering_isolation() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let token_b = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    client.register_offering(&issuer, &token_b, &8_000);
+
+    let payout_a =
+        client.calculate_distribution(&caller, &issuer, &token, &100_000, &1_000, &100, &holder);
+    let payout_b =
+        client.calculate_distribution(&caller, &issuer, &token_b, &100_000, &1_000, &100, &holder);
+
+    assert_eq!(payout_a, 5_000);
+    assert_eq!(payout_b, 8_000);
+}
+
+#[test]
+fn calculate_total_distributable_offering_isolation() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let token_b = Address::generate(&env);
+
+    client.register_offering(&issuer, &token_b, &8_000);
+
+    let total_a = client.calculate_total_distributable(&issuer, &token, &100_000);
+    let total_b = client.calculate_total_distributable(&issuer, &token_b, &100_000);
+
+    assert_eq!(total_a, 50_000);
+    assert_eq!(total_b, 80_000);
+}
+
+#[test]
+fn calculate_distribution_tiny_balance() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let payout = client.calculate_distribution(
+        &caller,
+        &issuer,
+        &token,
+        &100_000,
+        &1_000_000_000,
+        &1,
+        &holder,
+    );
+
+    assert_eq!(payout, 0);
+}
+
+#[test]
+fn calculate_distribution_all_zeros_except_supply() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let payout = client.calculate_distribution(&caller, &issuer, &token, &0, &1_000, &0, &holder);
+
+    assert_eq!(payout, 0);
+}
+
+#[test]
+fn calculate_distribution_single_holder_owns_all() {
+    let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
+    let caller = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    let total_revenue = 100_000_i128;
+    let total_supply = 1_000_i128;
+
+    let payout = client.calculate_distribution(
+        &caller,
+        &issuer,
+        &token,
+        &total_revenue,
+        &total_supply,
+        &total_supply,
+        &holder,
+    );
+
+    assert_eq!(payout, 50_000);
+}
